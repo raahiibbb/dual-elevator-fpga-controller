@@ -158,4 +158,4 @@ UART baud rate: 9600 bps (`CLOCKS_PER_PULSE = 10417` at 100 MHz)
 
 ## License
 
-This project was developed as a course (Leve-3, Term-II; EEE304: Digital Electronics Laboratory) project at the Department of Electrical and Electronic Engineering, Bangladesh University of Engineering and Technology (BUET).
+This project was developed as a course (Level-3, Term-II; EEE304: Digital Electronics Laboratory) project at the Department of Electrical and Electronic Engineering, Bangladesh University of Engineering and Technology (BUET).
