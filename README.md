@@ -112,8 +112,8 @@ Auto re-sync: if 0xFF appears mid-frame, the receiver restarts frame detection.
    ```
 
 2. **Create two Vivado projects** — one for each board:
-   - **COP project:** set `cop_top.v` as the top module, include `elevator_controller.v`, `cop_uart_handler.v`, `uart_tx.v`, `uart_rx.v`, `debouncer.v`, `seven_seg_mux.v`
-   - **HCP project:** set `hcp_top.v` as the top module, include `hcp_uart_handler.v`, `uart_tx.v`, `uart_rx.v`, `debouncer.v`, `seven_seg_mux.v`
+   - **car_operating_panel** set `cop_top.v` as the top module, include `elevator_controller.v`, `cop_uart_handler.v`, `uart_tx.v`, `uart_rx.v`, `debouncer.v`, `seven_seg_mux.v`
+   - **hall_call_panel** set `hcp_top.v` as the top module, include `hcp_uart_handler.v`, `uart_tx.v`, `uart_rx.v`, `debouncer.v`, `seven_seg_mux.v`
 
 3. **Add constraints** — create XDC constraint files mapping the ports to Nexys A7 pins (clock E3, switches, buttons, LEDs, 7-seg, PMOD JA)
 
@@ -158,4 +158,4 @@ UART baud rate: 9600 bps (`CLOCKS_PER_PULSE = 10417` at 100 MHz)
 
 ## License
 
-This project was developed as a course project at the Department of Electrical and Electronic Engineering, Bangladesh University of Engineering and Technology (BUET).
+This project was developed as a course (Leve-3, Term-II; EEE304: Digital Electronics Laboratory) project at the Department of Electrical and Electronic Engineering, Bangladesh University of Engineering and Technology (BUET).
