@@ -39,7 +39,16 @@
 //     2. If no lift is moving in the same direction:
 //        - One lift idle, other busy -> idle lift picks it up.
 //        - Both idle                 -> nearer lift (tie: lift 1).
-//        - Both busy (opposite dir)  -> nearer lift (tie: lift 1).
+//        - Both busy                 -> effective-distance comparison:
+//          a lift heading AWAY from the target floor is penalised (+16),
+//          so a lift heading TOWARD the call always wins over one
+//          heading away, regardless of raw absolute distance.
+//
+//   Directional stop filtering (FSM):
+//     A lift moving UP only stops for car requests and UP hall calls.
+//     A lift moving DOWN only stops for car requests and DOWN hall calls.
+//     Opposite-direction hall calls stay pending until the lift finishes
+//     its current run, reverses, and reaches the floor going the right way.
 //
 //   A hall call assigned to a same-direction lift is served either on the way
 //   (if the floor is ahead) or after the lift finishes its current run and
@@ -110,6 +119,8 @@ module elevator_controller (
 
     // Combinational scratch
     reg [7:0] reqs1, reqs2;
+    reg [7:0] reqs1_up, reqs1_down;   // direction-filtered: stop only for same-dir halls
+    reg [7:0] reqs2_up, reqs2_down;
     reg [2:0] next_floor1, next_floor2;
     integer   dist1, dist2;
 
@@ -303,15 +314,22 @@ module elevator_controller (
             for (fi = 0; fi <= 6; fi = fi + 1) begin
                 if (up_request[fi] && !lift1_up_assigned[fi] && !lift2_up_assigned[fi]) begin
                     // --- (a) Same floor, stoppable, direction-compatible ---
-                    // PH_DOOR_OPEN only matches if lift was NOT going DOWN
-                    if (lift_stoppable_for_up(lift1_phase, lift1_floor, fi[2:0], last_dir1)) begin
+                    // PH_DOOR_OPEN only matches if lift was NOT going DOWN,
+                    // UNLESS the lift has no more downward work (about to idle).
+                    if (lift_stoppable_for_up(lift1_phase, lift1_floor, fi[2:0], last_dir1)
+                        || (lift1_floor == fi[2:0] && lift1_phase == PH_DOOR_OPEN
+                            && last_dir1 == 2'b10
+                            && !has_below(lift1_floor_ind | lift1_down_assigned, lift1_floor))) begin
                         lift1_up_assigned[fi] <= 1'b1;
                         service_active1       <= 1'b1;
                         manual_open1          <= 1'b0;
                         lift1_phase           <= PH_DOOR_OPEN;
                         lift1_status_r        <= ST_OPEN;
                         door_extend1           = 1'b1;  // flag: reset timer in FSM
-                    end else if (lift_stoppable_for_up(lift2_phase, lift2_floor, fi[2:0], last_dir2)) begin
+                    end else if (lift_stoppable_for_up(lift2_phase, lift2_floor, fi[2:0], last_dir2)
+                        || (lift2_floor == fi[2:0] && lift2_phase == PH_DOOR_OPEN
+                            && last_dir2 == 2'b10
+                            && !has_below(lift2_floor_ind | lift2_down_assigned, lift2_floor))) begin
                         lift2_up_assigned[fi] <= 1'b1;
                         service_active2       <= 1'b1;
                         manual_open2          <= 1'b0;
@@ -337,10 +355,21 @@ module elevator_controller (
                         lift1_up_assigned[fi] <= 1'b1;
                     end else if ((lift2_phase == PH_IDLE) && (lift1_phase != PH_IDLE)) begin
                         lift2_up_assigned[fi] <= 1'b1;
-                    // --- (d) Both idle OR both opposite -> nearest ---
+                    // --- (d) Both idle OR both busy -> effective distance ---
+                    // Penalise lifts heading AWAY from the target floor.
+                    // "Away" = MOVING_UP with floor above target, or
+                    //          MOVING_DOWN with floor below target.
+                    // Penalty (16) exceeds max building distance (7) so a
+                    // lift heading toward the call always beats one heading away.
                     end else begin
                         dist1 = (lift1_floor > fi[2:0]) ? (lift1_floor - fi[2:0]) : (fi[2:0] - lift1_floor);
                         dist2 = (lift2_floor > fi[2:0]) ? (lift2_floor - fi[2:0]) : (fi[2:0] - lift2_floor);
+                        if ((lift1_phase == PH_MOVING_UP   && lift1_floor > fi[2:0]) ||
+                            (lift1_phase == PH_MOVING_DOWN && lift1_floor < fi[2:0]))
+                            dist1 = dist1 + 16;
+                        if ((lift2_phase == PH_MOVING_UP   && lift2_floor > fi[2:0]) ||
+                            (lift2_phase == PH_MOVING_DOWN && lift2_floor < fi[2:0]))
+                            dist2 = dist2 + 16;
                         if (dist1 <= dist2) lift1_up_assigned[fi] <= 1'b1;
                         else                lift2_up_assigned[fi] <= 1'b1;
                     end
@@ -354,15 +383,22 @@ module elevator_controller (
             for (fi = 1; fi <= 7; fi = fi + 1) begin
                 if (down_request[fi] && !lift1_down_assigned[fi] && !lift2_down_assigned[fi]) begin
                     // --- (a) Same floor, stoppable, direction-compatible ---
-                    // PH_DOOR_OPEN only matches if lift was NOT going UP
-                    if (lift_stoppable_for_down(lift1_phase, lift1_floor, fi[2:0], last_dir1)) begin
+                    // PH_DOOR_OPEN only matches if lift was NOT going UP,
+                    // UNLESS the lift has no more upward work (about to idle).
+                    if (lift_stoppable_for_down(lift1_phase, lift1_floor, fi[2:0], last_dir1)
+                        || (lift1_floor == fi[2:0] && lift1_phase == PH_DOOR_OPEN
+                            && last_dir1 == 2'b01
+                            && !has_above(lift1_floor_ind | lift1_up_assigned, lift1_floor))) begin
                         lift1_down_assigned[fi] <= 1'b1;
                         service_active1         <= 1'b1;
                         manual_open1            <= 1'b0;
                         lift1_phase             <= PH_DOOR_OPEN;
                         lift1_status_r          <= ST_OPEN;
                         door_extend1             = 1'b1;  // flag: reset timer in FSM
-                    end else if (lift_stoppable_for_down(lift2_phase, lift2_floor, fi[2:0], last_dir2)) begin
+                    end else if (lift_stoppable_for_down(lift2_phase, lift2_floor, fi[2:0], last_dir2)
+                        || (lift2_floor == fi[2:0] && lift2_phase == PH_DOOR_OPEN
+                            && last_dir2 == 2'b01
+                            && !has_above(lift2_floor_ind | lift2_up_assigned, lift2_floor))) begin
                         lift2_down_assigned[fi] <= 1'b1;
                         service_active2         <= 1'b1;
                         manual_open2            <= 1'b0;
@@ -388,12 +424,28 @@ module elevator_controller (
                         lift1_down_assigned[fi] <= 1'b1;
                     end else if ((lift2_phase == PH_IDLE) && (lift1_phase != PH_IDLE)) begin
                         lift2_down_assigned[fi] <= 1'b1;
-                    // --- (d) Both idle OR both opposite -> nearest ---
+                    // --- (d) Both idle OR both busy -> effective distance ---
+                    // If UP was also requested at the same floor this cycle,
+                    // the UP section (which ran first with identical distances)
+                    // already gave it to one lift — flip the tie here so the
+                    // DOWN goes to the OTHER lift, splitting the two callers.
                     end else begin
                         dist1 = (lift1_floor > fi[2:0]) ? (lift1_floor - fi[2:0]) : (fi[2:0] - lift1_floor);
                         dist2 = (lift2_floor > fi[2:0]) ? (lift2_floor - fi[2:0]) : (fi[2:0] - lift2_floor);
-                        if (dist1 <= dist2) lift1_down_assigned[fi] <= 1'b1;
-                        else                lift2_down_assigned[fi] <= 1'b1;
+                        if ((lift1_phase == PH_MOVING_UP   && lift1_floor > fi[2:0]) ||
+                            (lift1_phase == PH_MOVING_DOWN && lift1_floor < fi[2:0]))
+                            dist1 = dist1 + 16;
+                        if ((lift2_phase == PH_MOVING_UP   && lift2_floor > fi[2:0]) ||
+                            (lift2_phase == PH_MOVING_DOWN && lift2_floor < fi[2:0]))
+                            dist2 = dist2 + 16;
+                        if (up_request[fi]) begin
+                            // Simultaneous UP+DOWN: reverse preference to split
+                            if (dist2 <= dist1) lift2_down_assigned[fi] <= 1'b1;
+                            else                lift1_down_assigned[fi] <= 1'b1;
+                        end else begin
+                            if (dist1 <= dist2) lift1_down_assigned[fi] <= 1'b1;
+                            else                lift2_down_assigned[fi] <= 1'b1;
+                        end
                     end
                 end
             end
@@ -449,6 +501,8 @@ module elevator_controller (
             // 5. Lift 1 FSM
             // ============================================================
             reqs1 = lift1_floor_ind | lift1_up_assigned | lift1_down_assigned;
+            reqs1_up   = lift1_floor_ind | lift1_up_assigned;   // when going UP: car + UP halls
+            reqs1_down = lift1_floor_ind | lift1_down_assigned; // when going DOWN: car + DOWN halls
             next_floor1 = nearest_any(reqs1, lift1_floor);
 
             case (lift1_phase)
@@ -492,7 +546,7 @@ module elevator_controller (
                     end else begin
                         timer1 <= 29'd0;
                         lift1_floor <= lift1_floor + 1'b1;
-                        if (has_at_floor(reqs1, lift1_floor + 1'b1)) begin
+                        if (has_at_floor(reqs1_up, lift1_floor + 1'b1)) begin
                             lift1_phase     <= PH_ARRIVE_WAIT;
                             lift1_status_r  <= ST_CLOSED;
                             service_active1 <= 1'b1;
@@ -517,7 +571,7 @@ module elevator_controller (
                     end else begin
                         timer1 <= 29'd0;
                         lift1_floor <= lift1_floor - 1'b1;
-                        if (has_at_floor(reqs1, lift1_floor - 1'b1)) begin
+                        if (has_at_floor(reqs1_down, lift1_floor - 1'b1)) begin
                             lift1_phase     <= PH_ARRIVE_WAIT;
                             lift1_status_r  <= ST_CLOSED;
                             service_active1 <= 1'b1;
@@ -588,6 +642,8 @@ module elevator_controller (
             // 6. Lift 2 FSM (identical structure to Lift 1)
             // ============================================================
             reqs2 = lift2_floor_ind | lift2_up_assigned | lift2_down_assigned;
+            reqs2_up   = lift2_floor_ind | lift2_up_assigned;
+            reqs2_down = lift2_floor_ind | lift2_down_assigned;
             next_floor2 = nearest_any(reqs2, lift2_floor);
 
             case (lift2_phase)
@@ -629,7 +685,7 @@ module elevator_controller (
                     end else begin
                         timer2 <= 29'd0;
                         lift2_floor <= lift2_floor + 1'b1;
-                        if (has_at_floor(reqs2, lift2_floor + 1'b1)) begin
+                        if (has_at_floor(reqs2_up, lift2_floor + 1'b1)) begin
                             lift2_phase     <= PH_ARRIVE_WAIT;
                             lift2_status_r  <= ST_CLOSED;
                             service_active2 <= 1'b1;
@@ -654,7 +710,7 @@ module elevator_controller (
                     end else begin
                         timer2 <= 29'd0;
                         lift2_floor <= lift2_floor - 1'b1;
-                        if (has_at_floor(reqs2, lift2_floor - 1'b1)) begin
+                        if (has_at_floor(reqs2_down, lift2_floor - 1'b1)) begin
                             lift2_phase     <= PH_ARRIVE_WAIT;
                             lift2_status_r  <= ST_CLOSED;
                             service_active2 <= 1'b1;
